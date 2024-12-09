@@ -1,0 +1,8 @@
+__pycache__
+.vscode
+venv
+*.bin
+*.o
+*.s
+*.txt
+sifa
