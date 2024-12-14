@@ -3,13 +3,13 @@
 
 SIFA (Statistical Ineffective Fault Analysis) is a powerful fault-injection technique used in cryptographic research. This repository contains scripts designed to experiment with SIFA-based attacks on symmetric cryptography implementations, specifically AES.  
 
-Whether you're a cybersecurity researcher, a hardware hacker, or someone who just loves breaking crypto, this toolkit has you covered. Use it for learning, research, or chaotic fun—but remember, **use responsibly**.
+Whether you're a cybersecurity researcher, a hardware hacker, or someone who just loves breaking crypto, these tools have you covered. Use it for learning, research, or chaotic fun.
 
-In the real world you need to dial in your faults for this to work. On systems that have alarms/countermeasures it is not trivial.
+In practice you must to dial in your faults for this to work, ie bias correct intermediate values. Side channel profiling the device first will help determining the correct location in time to fault.
 
 ## Features
 - **Fault Injection Simulation** — Generate biased ineffective fault injection results according to specific fault models.
-- **SIFA Attack Implementions** — Break real world cryptography with countermeasures using the original/improved attacks.
+- **SIFA Attack Implementions** — Break AES with countermeasures using the original/improved attacks.
 - **CLI-Based** — Fully customizable from the command line.
 
 ## Usage
@@ -17,7 +17,7 @@ In the real world you need to dial in your faults for this to work. On systems t
 pip3 install numpy matplotlib tqdm
 ```
 
-Simulation script. Default uses the random-and fault. In real world the Fault Distribution Table (FDT) is hard to model. Log-Likelihood Ratio (LLR) coming in future release?
+Simulation script. Default uses the random-and fault. The real world Fault Distribution Table (FDT) will likely differ. Log-Likelihood Ratio (LLR) coming in future release?
 ```bash
 python3 simaes.py -h
 usage: simaes [-h] [-s SAMPLES] [-k KEY] [-r {9,10}] [-i {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15}] [-t {rand,flip,and,zero,one}] [-b {1,2,3,4,5,6,7,8}] [-v] output
@@ -46,13 +46,13 @@ Running
 python3 simaes.py cipher.bin -s 5000 -v
 ```
 
-`sifa.py` has research and reference implementation that has not been finished yet. Python is slow, so it was abandoned for C++ implementation.
+`sifa.py` has research and reference code. Python is slow, so it was abandoned for C++ implementation.
 ```bash
 usage: sifa [-h] [-s SAMPLES] [-a {2,9,10}] [-k {0,1,2,3}] [-v] input
 sifa: error: the following arguments are required: input
 ```
 
-MacOS super fast key search using NEON instructions and high priority threads.
+MacOS fast key search using NEON instructions and high priority threads.
 ```bash
 make
 ./sifa -i cipher.bin -o output.txt -v

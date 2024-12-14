@@ -40,8 +40,12 @@ uint64_t best_key = 0;
 double max_sei = -std::numeric_limits<double>::infinity();
 std::atomic<uint64_t> progress_counter{0};  // Atomic for thread-safe progress tracking
 
+uint32_t sample_limit = 0;  // Default: no limit
+int nround = 9;              // Default: round 9 attack
+
 void print_usage(char* argv0) {
-    std::cerr << "usage: " << argv0 << " -i [input data] [-o output text] [-v] [-s sample_limit]" << std::endl;
+    std::cerr << "usage: " << argv0 << " -i [input data] [-o output text] [-v] [-r round] [-s sample_limit]" << std::endl;
+    std::cerr << "valid rounds: 2 attack on plaintext, 9 attack on ciphertext" << std::endl;
     std::exit(EXIT_FAILURE);
 }
 
@@ -71,6 +75,65 @@ void load_fault_data(char* filename, std::vector<std::vector<uint8_t>>& plaintex
     }
 
     fp.close();
+}
+
+inline uint8_t partial_encrypt_2(std::vector<uint8_t>& plaintext, enum keygroup_t kg, uint8_t kg0, uint8_t kg1, uint8_t kg2, uint8_t kg3) {
+    // Load ciphertext directly into a NEON register
+    uint8x16_t state = vld1q_u8(plaintext.data());
+
+    // Create the keyguess NEON register
+    uint8x16_t keyguess;
+    switch (kg) {
+        case KEYGROUP_0:
+            keyguess = vsetq_lane_u8(kg0, vdupq_n_u8(0), 0);
+            keyguess = vsetq_lane_u8(kg1, keyguess, 5);
+            keyguess = vsetq_lane_u8(kg2, keyguess, 10);
+            keyguess = vsetq_lane_u8(kg3, keyguess, 15);
+            break;
+        case KEYGROUP_1:
+            keyguess = vsetq_lane_u8(kg0, vdupq_n_u8(0), 3);
+            keyguess = vsetq_lane_u8(kg1, keyguess, 4);
+            keyguess = vsetq_lane_u8(kg2, keyguess, 9);
+            keyguess = vsetq_lane_u8(kg3, keyguess, 14);
+            break;
+        case KEYGROUP_2:
+            keyguess = vsetq_lane_u8(kg0, vdupq_n_u8(0), 2);
+            keyguess = vsetq_lane_u8(kg1, keyguess, 7);
+            keyguess = vsetq_lane_u8(kg2, keyguess, 8);
+            keyguess = vsetq_lane_u8(kg3, keyguess, 13);
+            break;
+        case KEYGROUP_3:
+            keyguess = vsetq_lane_u8(kg0, vdupq_n_u8(0), 1);
+            keyguess = vsetq_lane_u8(kg1, keyguess, 6);
+            keyguess = vsetq_lane_u8(kg2, keyguess, 11);
+            keyguess = vsetq_lane_u8(kg3, keyguess, 12);
+            break;
+        default:
+            throw std::runtime_error("invalid key group");
+            break;
+    }
+
+    // ShiftRows, SubBytes, and MixColumns using AES encryption round
+    state = vaeseq_u8(state, keyguess);
+    state = vaesmcq_u8(state);
+
+    switch (kg) {
+        case KEYGROUP_0:
+            return vgetq_lane_u8(state, 0);
+            break;
+        case KEYGROUP_1:
+            return vgetq_lane_u8(state, 4);
+            break;
+        case KEYGROUP_2:
+            return vgetq_lane_u8(state, 8);
+            break;
+        case KEYGROUP_3:
+            return vgetq_lane_u8(state, 12);
+            break;
+        default:
+            throw std::runtime_error("invalid key group");
+            break;
+    }
 }
 
 inline uint8_t partial_decrypt_9(std::vector<uint8_t>& ciphertext, enum keygroup_t kg, uint8_t kg0, uint8_t kg1, uint8_t kg2, uint8_t kg3) {
@@ -156,7 +219,51 @@ void set_high_priority() {
     }
 }
 
-void search_keyspace(uint32_t ineffective, keygroup_t keygroup, uint64_t start, uint64_t end, std::vector<std::vector<uint8_t>>& ciphertexts) {
+void search_keyspace_2(uint32_t ineffective, keygroup_t keygroup, uint64_t start, uint64_t end, std::vector<std::vector<uint8_t>>& plaintexts) {
+    double local_max_sei = -std::numeric_limits<double>::infinity();
+    uint64_t local_best_key = 0;
+
+    set_high_priority();
+
+    // Preallocate counts outside the loop
+    std::array<int, 256> counts;
+
+    for (uint64_t keyguess = start; keyguess < end; ++keyguess) {
+        uint8_t kg0 = keyguess & 0xFF;
+        uint8_t kg1 = (keyguess >> 8) & 0xFF;
+        uint8_t kg2 = (keyguess >> 16) & 0xFF;
+        uint8_t kg3 = (keyguess >> 24) & 0xFF;
+
+        // Zero the counts array efficiently
+        counts.fill(0);
+
+        // Perform decryption and count results
+        for (size_t i = 0; i < ineffective; ++i) {
+            uint8_t result = partial_encrypt_2(plaintexts[i], keygroup, kg0, kg1, kg2, kg3);
+            counts[result]++;
+        }
+
+        // Compute Squared Euclidean Imbalance
+        // My best frieend <3
+        double sei_score = compute_sei(counts);
+        if (sei_score > local_max_sei) {
+            local_max_sei = sei_score;
+            local_best_key = keyguess;
+        }
+
+        // Update progress safely
+        progress_counter++;
+    }
+
+    // Update global best score using a mutex
+    std::lock_guard<std::mutex> lock(result_mutex);
+    if (local_max_sei > max_sei) {
+        max_sei = local_max_sei;
+        best_key = local_best_key;
+    }
+}
+
+void search_keyspace_9(uint32_t ineffective, keygroup_t keygroup, uint64_t start, uint64_t end, std::vector<std::vector<uint8_t>>& ciphertexts) {
     double local_max_sei = -std::numeric_limits<double>::infinity();
     uint64_t local_best_key = 0;
 
@@ -200,10 +307,45 @@ void search_keyspace(uint32_t ineffective, keygroup_t keygroup, uint64_t start, 
     }
 }
 
-void write_output(std::ostream& out, uint32_t ineffective, keygroup_t kg, long elapsed) {
-    out << std::dec << ineffective << " ineffective faults" << std::endl;
-    out << "keygroup: " << std::dec << kg << std::endl;
+void write_output_2(std::ostream& out, keygroup_t kg) {
+    uint8_t kg0 = best_key & 0xFF;
+    uint8_t kg1 = (best_key >> 8) & 0xFF;
+    uint8_t kg2 = (best_key >> 16) & 0xFF;
+    uint8_t kg3 = (best_key >> 24) & 0xFF;
 
+    out << std::hex << std::setfill('0');
+
+    switch (kg) {
+        case KEYGROUP_0:
+            out << "key byte 0: 0x" << std::setw(2) << static_cast<int>(kg0) << std::endl;
+            out << "key byte 5: 0x" << std::setw(2) << static_cast<int>(kg1) << std::endl;
+            out << "key byte 10: 0x" << std::setw(2) << static_cast<int>(kg2) << std::endl;
+            out << "key byte 15: 0x" << std::setw(2) << static_cast<int>(kg3) << std::endl;
+            break;
+        case KEYGROUP_1:
+            out << "key byte 3: 0x" << std::setw(2) << static_cast<int>(kg0) << std::endl;
+            out << "key byte 4: 0x" << std::setw(2) << static_cast<int>(kg1) << std::endl;
+            out << "key byte 9: 0x" << std::setw(2) << static_cast<int>(kg2) << std::endl;
+            out << "key byte 14: 0x" << std::setw(2) << static_cast<int>(kg3) << std::endl;
+            break;
+        case KEYGROUP_2:
+            out << "key byte 2: 0x" << std::setw(2) << static_cast<int>(kg0) << std::endl;
+            out << "key byte 7: 0x" << std::setw(2) << static_cast<int>(kg1) << std::endl;
+            out << "key byte 8: 0x" << std::setw(2) << static_cast<int>(kg2) << std::endl;
+            out << "key byte 13: 0x" << std::setw(2) << static_cast<int>(kg3) << std::endl;
+            break;
+        case KEYGROUP_3:
+            out << "key byte 1: 0x" << std::setw(2) << static_cast<int>(kg0) << std::endl;
+            out << "key byte 6: 0x" << std::setw(2) << static_cast<int>(kg1) << std::endl;
+            out << "key byte 11: 0x" << std::setw(2) << static_cast<int>(kg2) << std::endl;
+            out << "key byte 12: 0x" << std::setw(2) << static_cast<int>(kg3) << std::endl;
+            break;
+        default:
+            throw std::runtime_error("invalid key group");
+    }
+}
+
+void write_output_9(std::ostream& out, keygroup_t kg) {
     uint8_t kg0 = best_key & 0xFF;
     uint8_t kg1 = (best_key >> 8) & 0xFF;
     uint8_t kg2 = (best_key >> 16) & 0xFF;
@@ -239,6 +381,17 @@ void write_output(std::ostream& out, uint32_t ineffective, keygroup_t kg, long e
         default:
             throw std::runtime_error("invalid key group");
     }
+}
+
+void write_output(std::ostream& out, uint32_t ineffective, keygroup_t kg, long elapsed) {
+    out << std::dec << ineffective << " ineffective faults" << std::endl;
+    out << "keygroup: " << std::dec << kg << std::endl;
+
+    if (nround == 9) {
+        write_output_9(out, kg);
+    } else if (nround == 2) {
+        write_output_2(out, kg);
+    }
 
     out << "max SEI: " << std::dec << max_sei << std::endl;
     out << "elapsed time: " << elapsed << " seconds" << std::endl;
@@ -262,10 +415,9 @@ int main(int argc, char* argv[]) {
     char* input_file = NULL;
     char* output_file = NULL;
     keygroup_t keygroup = KEYGROUP_0;
-    uint32_t sample_limit = 0;  // Default: no limit
 
     // Parse command-line arguments
-    while ((opt = getopt(argc, argv, "i:o:s:k:v")) != -1) {
+    while ((opt = getopt(argc, argv, "i:o:s:k:r:v")) != -1) {
         switch (opt) {
             case 'i':
                 input_file = optarg;
@@ -292,6 +444,16 @@ int main(int argc, char* argv[]) {
                 }
                 break;
             }
+            case 'r': {
+                int rd = std::atoi(optarg);
+                if (rd == 2 || rd == 9) {
+                    nround = rd;
+                } else {
+                    std::cerr << "invalid round: " << rd << std::endl;
+                    print_usage(argv[0]);
+                }
+                break;
+            }
             case 'v':
                 verbose = true;
                 break;
@@ -308,6 +470,7 @@ int main(int argc, char* argv[]) {
     if (verbose) {
         std::cout << "verbose mode" << std::endl;
         std::cout << "keygroup: " << std::dec << keygroup << std::endl;
+        std::cout << "round: " << std::dec << nround << std::endl;
     }
 
     std::vector<std::vector<uint8_t>> plaintexts, ciphertexts;
@@ -336,7 +499,11 @@ int main(int argc, char* argv[]) {
     for (unsigned t = 0; t < num_threads; t++) {
         uint64_t start = t * keys_per_thread;
         uint64_t end = (t == num_threads - 1) ? TOTAL_KEYS : start + keys_per_thread;
-        threads.emplace_back(search_keyspace, ineffective, keygroup, start, end, std::ref(ciphertexts));
+        if (nround == 9) {
+            threads.emplace_back(search_keyspace_9, ineffective, keygroup, start, end, std::ref(ciphertexts));
+        } else if (nround == 2) {
+            threads.emplace_back(search_keyspace_2, ineffective, keygroup, start, end, std::ref(plaintexts));
+        }
     }
 
     // Monitor progress

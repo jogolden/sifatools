@@ -13,7 +13,7 @@ parser = argparse.ArgumentParser(prog="simaes", description="simulate AES encryp
 parser.add_argument("output", help="output file to store ineffective faults")
 parser.add_argument("-s", "--samples", type=int, default=1000, help="number of samples to collect")
 parser.add_argument("-k", "--key", type=validate_key, default="cafebabe01020304feeeeeedfaaaaace", help="default aes key is cafebabe01020304feeeeeedfaaaaace")
-parser.add_argument("-r", "--round", type=int, default=9, choices=[9, 10], help="round to inject fault into")
+parser.add_argument("-r", "--round", type=int, default=9, choices=[2, 9, 10], help="round to inject fault into")
 parser.add_argument("-i", "--index", type=int, default=0, choices=range(0, 16), help="which byte in the AES state to inject fault into")
 parser.add_argument("-t", "--type", type=str, default="and", choices=["rand", "flip", "and", "zero", "one"], help="type of fault: random, bit flip, random and, stuck at zero, stuck at one. paper section 3.1, FDT needs to produce bias")
 parser.add_argument("-b", "--bits", type=int, default=4, choices=range(1, 9), help="bit width for fault, starts from lsb")

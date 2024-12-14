@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from collections import Counter
 from tqdm import tqdm
-from aes import add_round_key, inv_mix_columns, inv_shift_rows, inv_sub_bytes
+from aes import *
 
 parser = argparse.ArgumentParser(prog="sifa", description="attack AES using SIFA")
 parser.add_argument("input", help="input file for ineffective faults")
@@ -23,6 +23,16 @@ with open(args.input, "rb") as fp:
     for i in range(ineffective):
         plaintexts.append(fp.read(16))
         ciphertexts.append(fp.read(16))
+
+def partial_encrypt_2(plaintext, keyguess):
+    ps2 = []
+    for i in range(4):
+        ps2.append(list(plaintext[i * 4:i * 4 + 4]))
+    add_round_key(ps2, keyguess)
+    sub_bytes(ps2)
+    shift_rows(ps2)
+    mix_columns(ps2)
+    return ps2
 
 def partial_decrypt_10(ciphertext, keyguess):
     ps10 = []
@@ -75,12 +85,50 @@ def compute_sei(counts):
 # round 9 state[3][0] <- faulted # looking at state[3][0]
 # [[0, 0, 0, 0xA0], [0, 0, 0x57, 0], [0, 0x9B, 0, 0], [0x39, 0, 0, 0]]
 
+# sei = np.zeros(256, dtype=np.float32)
+# test = np.zeros((256, ineffective), dtype=np.uint8)
+# for k in range(256):
+#     for i in range(ineffective):
+#         ps9 = partial_decrypt_9(ciphertexts[i], [[k, 0, 0, 0], [0, 0, 0, 0xC3], [0, 0, 0x48, 0], [0, 0x2A, 0, 0]])
+#         test[k][i] = ps9[0][0]
+#     sei[k] = compute_sei(np.bincount(test[k], minlength=256))
+# maxsei = np.argmax(sei)
+# print(hex(maxsei))
+
+# [[ 0xCA, 0xFE, 0xBA, 0xBE ], [ 0x01, 0x02, 0x03, 0x04 ], [ 0xFE, 0xEE, 0xEE, 0xED ], [ 0xFA, 0xAA, 0xAA, 0xCE ]]
+
+# round 2 state[0][0] <- faulted # looking at state[0][0]
+# round 2 state[0][1] <- faulted # looking at state[0][1]
+# round 2 state[0][2] <- faulted # looking at state[0][2]
+# round 2 state[0][3] <- faulted # looking at state[0][3]
+# [[ k, 0, 0, 0 ], [ 0, 0x02, 0, 0 ], [ 0 , 0, 0xEE, 0 ], [ 0, 0, 0, 0xCE ]]
+
+# round 2 state[1][0] <- faulted # looking at state[1][0]
+# round 2 state[1][1] <- faulted # looking at state[1][1]
+# round 2 state[1][2] <- faulted # looking at state[1][2]
+# round 2 state[1][3] <- faulted # looking at state[1][3]
+# [[ 0, 0, 0, k ], [ 0x01, 0, 0, 0 ], [ 0, 0xEE, 0, 0 ], [ 0, 0, 0xAA, 0 ]]
+
+# round 2 state[2][0] <- faulted # looking at state[2][0]
+# round 2 state[2][1] <- faulted # looking at state[2][1]
+# round 2 state[2][2] <- faulted # looking at state[2][2]
+# round 2 state[2][3] <- faulted # looking at state[2][3]
+# [[ 0, 0, k, 0 ], [ 0, 0, 0, 0x04 ], [ 0xFE, 0, 0, 0 ], [ 0, 0xAA, 0, 0 ]]
+
+# round 2 state[3][0] <- faulted # looking at state[3][0]
+# round 2 state[3][1] <- faulted # looking at state[3][1]
+# round 2 state[3][2] <- faulted # looking at state[3][2]
+# round 2 state[3][3] <- faulted # looking at state[3][3]
+# [[ 0, k, 0, 0 ], [ 0, 0, 0x03, 0 ], [ 0, 0, 0, 0xED ], [ 0xFA, 0, 0, 0 ]]
+
+index = 13
 sei = np.zeros(256, dtype=np.float32)
 test = np.zeros((256, ineffective), dtype=np.uint8)
 for k in range(256):
     for i in range(ineffective):
-        ps9 = partial_decrypt_9(ciphertexts[i], [[k, 0, 0, 0], [0, 0, 0, 0xC3], [0, 0, 0x48, 0], [0, 0x2A, 0, 0]])
-        test[k][i] = ps9[0][0]
+        ps2 = partial_encrypt_2(plaintexts[i], [[ 0, k, 0, 0 ], [ 0, 0, 0x03, 0 ], [ 0, 0, 0, 0xED ], [ 0xFA, 0, 0, 0 ]])
+        p, t = index // 4, index % 4
+        test[k][i] = ps2[p][t]
     sei[k] = compute_sei(np.bincount(test[k], minlength=256))
 maxsei = np.argmax(sei)
 print(hex(maxsei))
@@ -121,7 +169,7 @@ def print_matrix(matrix):
 
 # fig, axs = plt.subplots(2, 5, figsize=(15, 6))
 
-# keys_to_plot = [0x8F, 0x8D, np.argmax(sei), 234, 252, 182, 70, 100, 91, 26]
+# keys_to_plot = [0x8F, 0xCA, np.argmax(sei), 234, 252, 182, 70, 100, 91, 26]
 
 # for ax, key in zip(axs.flat, keys_to_plot):
 #     ax.hist(test[key], bins=256, edgecolor="black", range=(0, 256))
